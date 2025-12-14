@@ -2,7 +2,7 @@ local redstone, modem, eeprom = component.proxy(component.list("redstone")()), c
 local PORT = 1234
 local colorMap = {} -- id (as string) -> color index (1-based for colorBits)
 local colorBits = { "white", "orange", "magenta", "lightBlue", "yellow", "lime", "pink", "gray", "lightGray", "cyan", "purple", "blue", "brown", "green", "red", "black" }
-local REDSTONE_SIDE = 1
+local REDSTONE_SIDE = 0
 
 local ID = 2
 
