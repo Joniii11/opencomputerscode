@@ -93,6 +93,10 @@ while true do
   
   local data = unserialize(message)
   if not data then goto continue end
+
+  if data.event == "initial_startup" then
+    modem.broadcast(PORT, serialize({event = "zustaendigkeit_request", id = add}))
+  end
   
   local dataId = tonumber(data.id) or data.id
   
