@@ -6,7 +6,7 @@ local add = eeprom.getLabel()
 local PORT = 1234
 local uptime = computer.uptime
 
--- HARDWARE SIDES (Adjust these to match your wiring!)
+-- HARDWARE SIDES (Adjust these to match your wiring! aaaaaaaaaaaaaaaaaaaa)
 local SIDE_COMMAND  = 1  -- Output to Weichen (e.g., East)
 local SIDE_FEEDBACK = 0  -- Input from Weichen (e.g., West)
 
