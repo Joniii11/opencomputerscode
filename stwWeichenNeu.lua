@@ -83,11 +83,12 @@ while #zustaendigkeit == 0 do
 
 	local data = unserialize(message)
 	if not data then goto continue end
-	if data.id ~= add then goto continue end
 
-	if data.event == "initial_startup" then
+    if data.event == "initial_startup" then
 		modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
 	end
+
+	if data.id ~= add then goto continue end
 
 	if data.event == "zustaendigkeit_response" and data.id == add then
 		zustaendigkeit = unserialize(data.zustaendigkeit)
