@@ -3,13 +3,13 @@ local modem = component.proxy(component.list("modem")())
 local eeprom = component.proxy(component.list("eeprom")())
 
 local PORT = 1234
-local ID = 2 -- ID des Signals anpassen!
+local ID = 5 
 
 -- SIDES
 local SIDE_MAIN = 1 -- Oben (Hauptsignal)
 local SIDE_DIST = 0 -- Unten (Vorsignal)
 
--- COLORS (OpenComputers Color Indices)
+-- COLORS
 local C_WHITE  = 0
 local C_YELLOW = 4
 local C_GREEN  = 13
@@ -18,16 +18,16 @@ local C_RED    = 14
 -- TIMINGS
 local PING_INTERVAL = 10 
 local TIMEOUT_LIMIT = 15 
-local ANIMATION_DELAY = 0.25 -- Zeit, die das Signal "dunkel" ist beim Umschalten
+local ANIMATION_DELAY = 0.25 
 
 -- MODEM SETUP
 if modem.isWireless() then modem.setStrength(400) end
 modem.open(PORT)
 
--- STARTUP
+-- STARTUP BEEP
 computer.beep(1000, 0.5)
 
--- Speichert den aktuellen Ziel-Zustand
+-- STATE MEMORY
 local current_state = {
     main = "hp0",
     dist = "vr0"
@@ -54,18 +54,13 @@ local function unserialize(str)
   return nil
 end
 
--- HELPER: Output setzen (ohne Animation)
--- Schreibt die Farbwerte direkt auf die Leitung
+-- HELPER: Write Output
 local function writeToSide(side, stellung)
     local outputs = {}
     for i=0,15 do outputs[i] = 0 end
 
-    -- Mapping Logic
-    -- side 1 (Main): hp0(red), hp1(green), hp2(yellow), sh1(white)
-    -- side 0 (Dist): vr0(red), vr1(green), vr2(yellow), zs1(white)
-
     if stellung == "off" then
-        -- alles aus
+        -- all 0
     elseif stellung == "hp0" or stellung == "vr0" then
         outputs[C_RED] = 255
     elseif stellung == "hp1" or stellung == "vr1" then
@@ -79,73 +74,80 @@ local function writeToSide(side, stellung)
     redstone.setBundledOutput(side, outputs)
 end
 
--- ANIMATION FUNCTION
--- Schaltet erst aus, wartet kurz, schaltet dann an
+-- ANIMATION LOGIC
 local function updateSignalsAnimated(new_main, new_dist)
-    -- 1. Alles, was sich ändert, dunkel schalten
     local changed = false
     
+    -- Check if Main changed
     if new_main ~= current_state.main then
         writeToSide(SIDE_MAIN, "off")
         changed = true
     end
     
+    -- Check if Distant changed
     if new_dist ~= current_state.dist then
         writeToSide(SIDE_DIST, "off")
         changed = true
     end
 
-    -- 2. Kurze Dunkelphase (nur warten, wenn sich was geändert hat)
+    -- Wait briefly if anything turned off (Animation)
     if changed then
         computer.pullSignal(ANIMATION_DELAY)
     end
 
-    -- 3. Neue Werte setzen
+    -- Set new values
     writeToSide(SIDE_MAIN, new_main)
     writeToSide(SIDE_DIST, new_dist)
 
-    -- Status merken
+    -- Update Memory
     current_state.main = new_main
     current_state.dist = new_dist
 end
 
--- Initiale Abfrage
-writeToSide(SIDE_MAIN, "hp0") -- Sicherer Startzustand
-writeToSide(SIDE_MAIN, "hp1")
-writeToSide(SIDE_MAIN, "hp2")
-modem.broadcast(PORT, serialize({event = "signal_request_state", id = ID}))
+-- ============================================================================
+-- LAMP TEST (Visual Startup)
+-- ============================================================================
+-- Shows White (Sh1/Zs1)
 writeToSide(SIDE_MAIN, "sh1")
-writeToSide(SIDE_DIST, "vr0")
-writeToSide(SIDE_DIST, "vr1")
-writeToSide(SIDE_DIST, "vr2")
 writeToSide(SIDE_DIST, "zs1")
+computer.pullSignal(0.5)
 
+-- Shows Red (Hp0/Vr0)
 writeToSide(SIDE_MAIN, "hp0")
+writeToSide(SIDE_DIST, "vr0")
+computer.pullSignal(0.5)
+
+-- Shows Off (Waiting for server)
+writeToSide(SIDE_MAIN, "off")
 writeToSide(SIDE_DIST, "off")
 
+-- Request actual state from server
+modem.broadcast(PORT, serialize({event = "signal_request_state", id = ID}))
+
+-- ============================================================================
+-- MAIN LOOP
+-- ============================================================================
 local last_server_contact = computer.uptime()
 local next_ping = 0
 
--- MAIN LOOP
 while true do
     local now = computer.uptime()
     
-    -- PING
+    -- 1. PING SERVER
     if now >= next_ping then
         modem.broadcast(PORT, serialize({event = "ping", id = ID}))
         next_ping = now + PING_INTERVAL
     end
 
-    -- TIMEOUT CHECK (Failsafe -> Dunkel)
+    -- 2. TIMEOUT WATCHDOG (Failsafe)
     if (now - last_server_contact) > TIMEOUT_LIMIT then
         writeToSide(SIDE_MAIN, "off")
         writeToSide(SIDE_DIST, "off")
-        -- Status zurücksetzen, damit beim Wiederverbinden das Licht wieder angeht
         current_state.main = "off"
         current_state.dist = "off"
     end
 
-    -- SLEEP TIME
+    -- 3. WAIT FOR SIGNAL
     local time_left = next_ping - now
     if time_left < 0.1 then time_left = 0.1 end
 
@@ -162,7 +164,7 @@ while true do
                 modem.broadcast(PORT, serialize({event = "signal_request_state", id = ID}))
             end
 
-            -- B. Pong (Keep-Alive)
+            -- B. Pong
             if data.event == "pong" and (dataID == ID) then
                 last_server_contact = now
             end
@@ -171,18 +173,17 @@ while true do
             if data.event == "signal_update" and (dataID == ID) then
                 last_server_contact = now 
                 
-                -- Neue Werte auslesen (Fallback auf aktuelle Werte, falls nil)
-                local target_main = data.main or current_state.main
+                local target_main = data.state or current_state.main
                 local target_dist = data.dist or current_state.dist
                 
-                -- Animation ausführen
+                -- Execute
                 updateSignalsAnimated(target_main, target_dist)
 
-                -- Bestätigung senden (ACK)
+                -- Send ACK with the COMPLETE state (Combined)
                 modem.broadcast(PORT, serialize({
                     event = "signal_update_ack",
                     id = ID,
-                    main = target_main,
+                    state = target_main,
                     dist = target_dist
                 }))
             end
