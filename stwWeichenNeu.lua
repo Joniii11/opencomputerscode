@@ -6,15 +6,15 @@ local add = eeprom.getLabel()
 local PORT = 1234
 local uptime = computer.uptime
 
--- HARDWARE SIDES (Adjust these to match your wiring! aaaaaaaaaaaaaaaaaaaa)
-local SIDE_COMMAND  = 1  -- Output to Weichen (e.g., East)
-local SIDE_FEEDBACK = 0  -- Input from Weichen (e.g., West)
+-- HARDWARE SIDES (Adjust if needed!)
+local SIDE_COMMAND  = 4  -- Output to Weichen (East)
+local SIDE_FEEDBACK = 5  -- Input from Weichen (West)
 
 local zustaendigkeit = {}
 local colorMap = {} 
 local last_lage = {}
-local next_poll = 0 -- Timer variable
-local colorBits = { "white", "orange", "magenta", "lightBlue", "yellow", "lime", "pink", "gray", "lightGray", "cyan", "purple", "blue", "brown", "green", "red", "black" }
+local active_pulses = {} -- Stores [colorIndex] = time_to_turn_off
+local next_poll = 0 
 
 modem.open(PORT)
 
@@ -51,82 +51,120 @@ local function readWeichenlage(id)
   return (val > 0) and "-" or "+"
 end
 
-local function setRedstone(lage, id)
-  local idx = colorMap[tostring(id)]
+local function triggerSwitchPulse(target_lage, id)
+  local strID = tostring(id)
+  local current_real_lage = readWeichenlage(id)
+
+  if current_real_lage == target_lage then
+    modem.broadcast(PORT, serialize({event = "ack", id = id, lage = current_real_lage}))
+    return
+  end
+
+  local idx = colorMap[strID]
   if not idx then return end
 
   local colorIndex = idx - 1
-  local level = (lage == "-") and 255 or 0
 
+  -- Turn Output ON
   local currentValues = redstone.getBundledOutput(SIDE_COMMAND) or {}
-  for i=0,15 do currentValues[i] = currentValues[i] or 0 end -- Safe init
-  currentValues[colorIndex] = level
+  for i=0,15 do currentValues[i] = currentValues[i] or 0 end
+  currentValues[colorIndex] = 255 -- ON
   redstone.setBundledOutput(SIDE_COMMAND, currentValues)
+
+  -- Schedule Turn OFF in 1.0 second (Non-blocking)
+  active_pulses[colorIndex] = uptime() + 1.0
 end
 
--- 2. Startup Loop: GET RESPONSIBILITY
--- We use a loop that retries every 2 seconds if it doesn't get an answer.
+-- ============================================================================
+-- 2. RE-INITIALIZATION FUNCTION
+-- This consolidated function is called on startup and on server restart
+-- ============================================================================
+local function initialize_weichen_state(ids)
+    for _, MY_ID in ipairs(ids) do
+        local strID = tostring(MY_ID)
+        local current = readWeichenlage(MY_ID)
+        last_lage[strID] = current
+        -- Send ACK with the current physical state
+        modem.broadcast(PORT, serialize({event = "ack", id = MY_ID, lage = current}))
+        modem.broadcast(9999, "Re-ACK ID: " .. strID .. " Lage: " .. current)
+    end
+end
+
+-- 3. Startup Loop (Get ID)
 local last_req_time = 0
+
+-- Function to handle the ID list response, common to startup and restart
+local function handle_zustaendigkeit_response(data)
+    zustaendigkeit = unserialize(data.zustaendigkeit)
+    colorMap = {}
+    last_lage = {}
+    for i, MY_ID in ipairs(zustaendigkeit) do
+        colorMap[tostring(MY_ID)] = i
+    end
+    modem.broadcast(PORT, serialize({event = "ack", id = add, zustaendigkeit = data.zustaendigkeit}))
+    -- Report the status of all assigned weichen immediately after getting the list
+    initialize_weichen_state(zustaendigkeit)
+end
+
 
 while #zustaendigkeit == 0 do
   local now = uptime()
   
-  -- If 2 seconds passed since last request, send again (RETRY LOGIC)
   if now - last_req_time > 2 then
     modem.broadcast(PORT, serialize({event = "zustaendigkeit_request", id = add}))
     last_req_time = now
   end
 
-  -- Wait briefly (0.1s) for a response, then loop again
   local event, _, _, port, _, msg = computer.pullSignal(0.1)
 
   if event == "modem_message" and port == PORT then
     local data = unserialize(msg)
     if data then
-      if data.event == "initial_startup" then
-         last_req_time = 0 -- force immediate retry
-      end
-
-      -- ERROR FIX: Convert both IDs to string before comparing
+      if data.event == "initial_startup" then last_req_time = 0 end
+      
+      -- Check for Zustaendigkeit response
       if tostring(data.id) == tostring(add) and data.event == "zustaendigkeit_response" then
-        zustaendigkeit = unserialize(data.zustaendigkeit)
-        colorMap = {}
-        for i, MY_ID in ipairs(zustaendigkeit) do
-          colorMap[tostring(MY_ID)] = i
-          -- Initialize last known state from PHYSICAL HARDWARE
-          last_lage[tostring(MY_ID)] = readWeichenlage(MY_ID)
-        end
-        modem.broadcast(PORT, serialize({event = "ack", id = add, zustaendigkeit = data.zustaendigkeit}))
+          handle_zustaendigkeit_response(data)
       end
     end
   end
 end
 
--- Report initial physical state to server
-for _, MY_ID in ipairs(zustaendigkeit) do
-    local current = readWeichenlage(MY_ID)
-    -- Optional: Sync output to match input immediately?
-    -- setRedstone(current, MY_ID) 
-    modem.broadcast(PORT, serialize({event = "ack", id = MY_ID, lage = current}))
-end
 
--- 3. Main Loop
+-- 4. Main Loop
 next_poll = uptime() + 2
 
 while true do
   local now = uptime()
   
-  -- TIMER LOGIC: Calculate how long to sleep
+  -- A. PULSE MANAGEMENT (Turn off signals that have been on for 1s)
+  local pulses_changed = false
+  local output_values = nil 
+
+  for cIdx, turn_off_time in pairs(active_pulses) do
+    if now >= turn_off_time then
+      if not output_values then 
+         output_values = redstone.getBundledOutput(SIDE_COMMAND) or {}
+         for i=0,15 do output_values[i] = output_values[i] or 0 end
+      end
+      output_values[cIdx] = 0 -- Turn OFF
+      active_pulses[cIdx] = nil 
+      pulses_changed = true
+    end
+  end
+
+  if pulses_changed then
+    redstone.setBundledOutput(SIDE_COMMAND, output_values)
+  end
+
+  -- B. TIMER CALCULATION
   local time_left = next_poll - now
   if time_left < 0.1 then time_left = 0.1 end
-
-  -- Wait for message OR timeout
-  local event, _, _, port, _, msg = computer.pullSignal(time_left)
   
-  -- Update time after waking up
+  local event, _, _, port, _, msg = computer.pullSignal(time_left)
   now = uptime()
 
-  -- A. CHECK FEEDBACK (Every 2 seconds)
+  -- C. FEEDBACK POLL (Every 2 seconds)
   if now >= next_poll then
     next_poll = now + 2
     for _, MY_ID in ipairs(zustaendigkeit) do
@@ -135,30 +173,31 @@ while true do
        
        if last_lage[strID] ~= current then
           last_lage[strID] = current
-          -- Detected manual change -> Tell Server
           modem.broadcast(PORT, serialize({event = "ack", id = MY_ID, lage = current}))
        end
     end
   end
 
-  -- B. HANDLE MESSAGES
+  -- D. MESSAGE HANDLING
   if event == "modem_message" and port == PORT then
     local data = unserialize(msg)
     if data then
        local dataID = tostring(data.id)
        
-       -- Server Restart
+       -- *** FIX: Server Restart Handling ***
        if data.event == "initial_startup" then
+          -- Re-request responsibility immediately, resetting the timer
           modem.broadcast(PORT, serialize({event = "zustaendigkeit_request", id = add}))
-       end
+       
+       -- Check if this is the response to the Zustaendigkeit request
+       elseif data.event == "zustaendigkeit_response" and tostring(data.id) == tostring(add) then
+           -- Process the new list and immediately report physical states
+           handle_zustaendigkeit_response(data)
        
        -- Switch Commands
-       if colorMap[dataID] then
+       elseif colorMap[dataID] then
           if data.event == "umstellauftrag" then
-             setRedstone(data.lage, dataID)
-             -- Update memory immediately so the poll doesn't think it's a manual change
-             last_lage[dataID] = data.lage 
-             modem.broadcast(PORT, serialize({event = "ack", id = dataID, lage = data.lage}))
+             triggerSwitchPulse(data.lage, dataID)
              
           elseif data.event == "request_lage" then
              local current = readWeichenlage(dataID)
