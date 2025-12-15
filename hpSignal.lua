@@ -30,7 +30,7 @@ computer.beep(1000, 0.5)
 -- STATE MEMORY
 local current_state = {
     main = "hp0",
-    dist = "vr0"
+    dist = "off"
 }
 
 -- HELPER: Serialization
