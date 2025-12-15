@@ -4,10 +4,11 @@ local eeprom = component.proxy(component.list("eeprom")())
 
 local PORT = 1234
 local ID = 5 
+local CODE_VERSION = "v5" -- This MUST appear in your logs
 
 -- SIDES
-local SIDE_MAIN = 1 -- Hp0/1/2, Sh1
-local SIDE_DIST = 0 -- Vr0/1/2, Zs1
+local SIDE_MAIN = 1 -- Oben
+local SIDE_DIST = 0 -- Unten
 
 -- COLORS
 local C_WHITE  = 0
@@ -20,14 +21,11 @@ local PING_INTERVAL = 10
 local TIMEOUT_LIMIT = 15 
 local ANIMATION_DELAY = 0.25 
 
--- EVENT QUEUE (Fixes race condition where Vr0 arrives during Hp1 animation)
 local event_queue = {}
 
--- MODEM SETUP
 if modem.isWireless() then modem.setStrength(400) end
 modem.open(PORT)
 
--- STARTUP BEEP
 computer.beep(1000, 0.5)
 
 -- STATE MEMORY
@@ -57,8 +55,7 @@ local function unserialize(str)
   return nil
 end
 
--- HELPER: Smart Sleep 
--- Captures messages arriving during animation so they aren't lost
+-- HELPER: Smart Sleep (Captures messages during animation)
 local function smart_sleep(duration)
     local deadline = computer.uptime() + duration
     while true do
@@ -68,15 +65,13 @@ local function smart_sleep(duration)
         local time_left = deadline - now
         local signal = table.pack(computer.pullSignal(time_left))
         
-        -- If we caught a signal (that isn't a timeout nil), save it!
         if signal.n > 0 and signal[1] ~= nil then
             table.insert(event_queue, signal)
         end
     end
 end
 
--- HELPER: Get Next Event 
--- Prioritizes queue, then waits for new events
+-- HELPER: Get Next Event (Queue Aware)
 local function get_next_event(timeout)
     if #event_queue > 0 then
         return table.unpack(table.remove(event_queue, 1))
@@ -118,7 +113,6 @@ local function updateSignalsAnimated(new_main, new_dist)
         changed = true
     end
 
-    -- Use smart_sleep to catch the Vr0 message if it arrives now!
     if changed then
         smart_sleep(ANIMATION_DELAY)
     end
@@ -130,39 +124,32 @@ local function updateSignalsAnimated(new_main, new_dist)
     current_state.dist = new_dist
 end
 
--- ============================================================================
--- LAMP TEST (Visual Startup)
--- ============================================================================
+-- VISUAL TEST (Reboot confirmation)
 writeToSide(SIDE_MAIN, "sh1")
 writeToSide(SIDE_DIST, "zs1")
 computer.pullSignal(0.5)
-
 writeToSide(SIDE_MAIN, "hp0")
 writeToSide(SIDE_DIST, "vr0")
 computer.pullSignal(0.5)
-
 writeToSide(SIDE_MAIN, "off")
 writeToSide(SIDE_DIST, "off")
 
--- Request actual state from server
 modem.broadcast(PORT, serialize({event = "signal_request_state", id = ID}))
 
--- ============================================================================
 -- MAIN LOOP
--- ============================================================================
 local last_server_contact = computer.uptime()
 local next_ping = 0
 
 while true do
     local now = computer.uptime()
     
-    -- 1. PING SERVER
+    -- PING
     if now >= next_ping then
         modem.broadcast(PORT, serialize({event = "ping", id = ID}))
         next_ping = now + PING_INTERVAL
     end
 
-    -- 2. TIMEOUT WATCHDOG
+    -- WATCHDOG
     if (now - last_server_contact) > TIMEOUT_LIMIT then
         writeToSide(SIDE_MAIN, "off")
         writeToSide(SIDE_DIST, "off")
@@ -170,7 +157,7 @@ while true do
         current_state.dist = "off"
     end
 
-    -- 3. WAIT FOR SIGNAL (Queue Aware)
+    -- WAIT FOR SIGNAL
     local time_left = next_ping - now
     if time_left < 0.1 then time_left = 0.1 end
 
@@ -182,39 +169,35 @@ while true do
         if data then
             local dataID = tonumber(data.id) or data.id
 
-            -- A. Server Restart -> REBOOT
+            -- REBOOT COMMAND
             if data.event == "initial_startup" then
                 computer.shutdown(true) 
             end
 
-            -- B. Pong
+            -- PONG
             if data.event == "pong" and (dataID == ID) then
                 last_server_contact = now
             end
 
-            -- C. Signal Update
+            -- SIGNAL UPDATE
             if data.event == "signal_update" and (dataID == ID) then
                 last_server_contact = now 
                 
-                -- Merge new data with current state
                 local target_main = data.state or current_state.main
                 local target_dist = data.dist or current_state.dist
                 
-                -- Force Vr0 if Main is Red
-                if target_main == "hp0" then
-                    target_dist = "off"
-                end
+                -- Force vr0 if main is hp0
+                if target_main == "hp0" then target_dist = "off" end
 
-                -- Ensure target_dist is never nil for serialization
+                -- Safety check for nil
                 target_dist = target_dist or "off"
 
-                -- Execute (capturing packets during sleep)
                 updateSignalsAnimated(target_main, target_dist)
 
-                -- Send ACK
                 modem.broadcast(PORT, serialize({
                     event = "signal_update_ack",
                     id = ID,
+                    ver = CODE_VERSION, -- VERSION CHECK
                     state = target_main,
                     dist = target_dist
                 }))
