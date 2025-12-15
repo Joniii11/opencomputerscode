@@ -6,8 +6,8 @@ local PORT = 1234
 local ID = 5 
 
 -- SIDES
-local SIDE_MAIN = 1 
-local SIDE_DIST = 0 
+local SIDE_MAIN = 1 -- Hp0/1/2, Sh1
+local SIDE_DIST = 0 -- Vr0/1/2, Zs1
 
 -- COLORS
 local C_WHITE  = 0
@@ -20,7 +20,7 @@ local PING_INTERVAL = 10
 local TIMEOUT_LIMIT = 15 
 local ANIMATION_DELAY = 0.25 
 
--- EVENT BUFFER (To fix lost packets during animation)
+-- EVENT QUEUE (Fixes race condition where Vr0 arrives during Hp1 animation)
 local event_queue = {}
 
 -- MODEM SETUP
@@ -57,7 +57,8 @@ local function unserialize(str)
   return nil
 end
 
--- HELPER: Smart Sleep (Prevents ignoring messages during animation)
+-- HELPER: Smart Sleep 
+-- Captures messages arriving during animation so they aren't lost
 local function smart_sleep(duration)
     local deadline = computer.uptime() + duration
     while true do
@@ -65,23 +66,21 @@ local function smart_sleep(duration)
         if now >= deadline then break end
         
         local time_left = deadline - now
-        -- Pull signal with remaining time
         local signal = table.pack(computer.pullSignal(time_left))
         
-        -- If we caught a signal (not nil), save it for later!
+        -- If we caught a signal (that isn't a timeout nil), save it!
         if signal.n > 0 and signal[1] ~= nil then
             table.insert(event_queue, signal)
         end
     end
 end
 
--- HELPER: Get Next Event (Checks queue first, then pulls new)
+-- HELPER: Get Next Event 
+-- Prioritizes queue, then waits for new events
 local function get_next_event(timeout)
     if #event_queue > 0 then
-        -- Return the oldest saved event
         return table.unpack(table.remove(event_queue, 1))
     end
-    -- If empty, wait for new one
     return computer.pullSignal(timeout)
 end
 
@@ -119,7 +118,7 @@ local function updateSignalsAnimated(new_main, new_dist)
         changed = true
     end
 
-    -- Use smart_sleep so we don't lose messages during the blackout
+    -- Use smart_sleep to catch the Vr0 message if it arrives now!
     if changed then
         smart_sleep(ANIMATION_DELAY)
     end
@@ -171,11 +170,10 @@ while true do
         current_state.dist = "off"
     end
 
-    -- 3. WAIT FOR SIGNAL (Using queue-aware function)
+    -- 3. WAIT FOR SIGNAL (Queue Aware)
     local time_left = next_ping - now
     if time_left < 0.1 then time_left = 0.1 end
 
-    -- REPLACED computer.pullSignal with get_next_event
     local eventType, _, _, port, _, message = get_next_event(time_left)
 
     if eventType == "modem_message" and port == PORT then
@@ -184,9 +182,8 @@ while true do
         if data then
             local dataID = tonumber(data.id) or data.id
 
-            -- A. Server Restart -> REBOOT MICROCONTROLLER
+            -- A. Server Restart -> REBOOT
             if data.event == "initial_startup" then
-                -- true = reboot
                 computer.shutdown(true) 
             end
 
@@ -199,15 +196,19 @@ while true do
             if data.event == "signal_update" and (dataID == ID) then
                 last_server_contact = now 
                 
+                -- Merge new data with current state
                 local target_main = data.state or current_state.main
                 local target_dist = data.dist or current_state.dist
                 
-                -- Safety Logic: Hp0 forces Vr-Off
+                -- Force Vr0 if Main is Red
                 if target_main == "hp0" then
                     target_dist = "off"
                 end
 
-                -- Execute (captures incoming messages during sleep)
+                -- Ensure target_dist is never nil for serialization
+                target_dist = target_dist or "off"
+
+                -- Execute (capturing packets during sleep)
                 updateSignalsAnimated(target_main, target_dist)
 
                 -- Send ACK
