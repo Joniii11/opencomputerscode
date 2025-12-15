@@ -6,8 +6,8 @@ local PORT = 1234
 local ID = 5 
 
 -- SIDES
-local SIDE_MAIN = 1 -- Oben (Hauptsignal)
-local SIDE_DIST = 0 -- Unten (Vorsignal)
+local SIDE_MAIN = 1 
+local SIDE_DIST = 0 
 
 -- COLORS
 local C_WHITE  = 0
@@ -19,6 +19,9 @@ local C_RED    = 14
 local PING_INTERVAL = 10 
 local TIMEOUT_LIMIT = 15 
 local ANIMATION_DELAY = 0.25 
+
+-- EVENT BUFFER (To fix lost packets during animation)
+local event_queue = {}
 
 -- MODEM SETUP
 if modem.isWireless() then modem.setStrength(400) end
@@ -54,6 +57,34 @@ local function unserialize(str)
   return nil
 end
 
+-- HELPER: Smart Sleep (Prevents ignoring messages during animation)
+local function smart_sleep(duration)
+    local deadline = computer.uptime() + duration
+    while true do
+        local now = computer.uptime()
+        if now >= deadline then break end
+        
+        local time_left = deadline - now
+        -- Pull signal with remaining time
+        local signal = table.pack(computer.pullSignal(time_left))
+        
+        -- If we caught a signal (not nil), save it for later!
+        if signal.n > 0 and signal[1] ~= nil then
+            table.insert(event_queue, signal)
+        end
+    end
+end
+
+-- HELPER: Get Next Event (Checks queue first, then pulls new)
+local function get_next_event(timeout)
+    if #event_queue > 0 then
+        -- Return the oldest saved event
+        return table.unpack(table.remove(event_queue, 1))
+    end
+    -- If empty, wait for new one
+    return computer.pullSignal(timeout)
+end
+
 -- HELPER: Write Output
 local function writeToSide(side, stellung)
     local outputs = {}
@@ -78,28 +109,24 @@ end
 local function updateSignalsAnimated(new_main, new_dist)
     local changed = false
     
-    -- Check if Main changed
     if new_main ~= current_state.main then
         writeToSide(SIDE_MAIN, "off")
         changed = true
     end
     
-    -- Check if Distant changed
     if new_dist ~= current_state.dist then
         writeToSide(SIDE_DIST, "off")
         changed = true
     end
 
-    -- Wait briefly if anything turned off (Animation)
+    -- Use smart_sleep so we don't lose messages during the blackout
     if changed then
-        computer.pullSignal(ANIMATION_DELAY)
+        smart_sleep(ANIMATION_DELAY)
     end
 
-    -- Set new values
     writeToSide(SIDE_MAIN, new_main)
     writeToSide(SIDE_DIST, new_dist)
 
-    -- Update Memory
     current_state.main = new_main
     current_state.dist = new_dist
 end
@@ -107,19 +134,14 @@ end
 -- ============================================================================
 -- LAMP TEST (Visual Startup)
 -- ============================================================================
--- Shows White (Sh1/Zs1)
 writeToSide(SIDE_MAIN, "sh1")
 writeToSide(SIDE_DIST, "zs1")
 computer.pullSignal(0.5)
 
--- Shows Red (Hp0/Vr0)
 writeToSide(SIDE_MAIN, "hp0")
-writeToSide(SIDE_MAIN, "hp1")
+writeToSide(SIDE_DIST, "vr0")
 computer.pullSignal(0.5)
 
-writeToSide(SIDE_MAIN, "hp2")
-
--- Shows Off (Waiting for server)
 writeToSide(SIDE_MAIN, "off")
 writeToSide(SIDE_DIST, "off")
 
@@ -141,7 +163,7 @@ while true do
         next_ping = now + PING_INTERVAL
     end
 
-    -- 2. TIMEOUT WATCHDOG (Failsafe)
+    -- 2. TIMEOUT WATCHDOG
     if (now - last_server_contact) > TIMEOUT_LIMIT then
         writeToSide(SIDE_MAIN, "off")
         writeToSide(SIDE_DIST, "off")
@@ -149,11 +171,12 @@ while true do
         current_state.dist = "off"
     end
 
-    -- 3. WAIT FOR SIGNAL
+    -- 3. WAIT FOR SIGNAL (Using queue-aware function)
     local time_left = next_ping - now
     if time_left < 0.1 then time_left = 0.1 end
 
-    local eventType, _, _, port, _, message = computer.pullSignal(time_left)
+    -- REPLACED computer.pullSignal with get_next_event
+    local eventType, _, _, port, _, message = get_next_event(time_left)
 
     if eventType == "modem_message" and port == PORT then
         local data = unserialize(message)
@@ -161,9 +184,10 @@ while true do
         if data then
             local dataID = tonumber(data.id) or data.id
 
-            -- A. Server Restart
+            -- A. Server Restart -> REBOOT MICROCONTROLLER
             if data.event == "initial_startup" then
-                modem.broadcast(PORT, serialize({event = "signal_request_state", id = ID}))
+                -- true = reboot
+                computer.shutdown(true) 
             end
 
             -- B. Pong
@@ -178,10 +202,15 @@ while true do
                 local target_main = data.state or current_state.main
                 local target_dist = data.dist or current_state.dist
                 
-                -- Execute
+                -- Safety Logic: Hp0 forces Vr-Off
+                if target_main == "hp0" then
+                    target_dist = "off"
+                end
+
+                -- Execute (captures incoming messages during sleep)
                 updateSignalsAnimated(target_main, target_dist)
 
-                -- Send ACK with the COMPLETE state (Combined)
+                -- Send ACK
                 modem.broadcast(PORT, serialize({
                     event = "signal_update_ack",
                     id = ID,
