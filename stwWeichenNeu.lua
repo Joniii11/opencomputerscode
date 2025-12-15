@@ -10,8 +10,8 @@ local add = eeprom.getLabel()
 local PORT = 1234
 
 -- Directional sides: adjust if wiring differs
-local OUTPUT_SIDE = 1 -- east side: commands to weichen
-local FEEDBACK_SIDE = 0 -- west side: feedback from weichen
+local OUTPUT_SIDE = 4 -- east side: commands to weichen
+local FEEDBACK_SIDE = 5 -- west side: feedback from weichen
 
 local zustaendigkeit = {}
 local colorMap = {} -- id (string) -> color index (1-based for colorBits)
