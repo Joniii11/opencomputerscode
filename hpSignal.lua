@@ -109,8 +109,8 @@ local function updateSignalsAnimated(new_main, new_dist)
     end
     
     if new_dist ~= current_state.dist then
-        writeToSide(SIDE_DIST, "off")
-        changed = true
+        writeToSide(SIDE_DIST, new_dist)
+        current_state.dist = new_dist
     end
 
     if changed then
@@ -118,10 +118,8 @@ local function updateSignalsAnimated(new_main, new_dist)
     end
 
     writeToSide(SIDE_MAIN, new_main)
-    writeToSide(SIDE_DIST, new_dist)
 
     current_state.main = new_main
-    current_state.dist = new_dist
 end
 
 -- VISUAL TEST (Reboot confirmation)
