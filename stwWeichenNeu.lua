@@ -107,7 +107,7 @@ while #zustaendigkeit == 0 do
 	end
 end
 
--- On startup: report initial lage from feedback instead of requesting
+-- On startup: report initial lage from feedback instead of requesting -----------------------
 for _, MY_ID in ipairs(zustaendigkeit) do
 	local lage = readWeichenlage(MY_ID) or "+"
 	last_lage[MY_ID] = lage
