@@ -1,6 +1,3 @@
-local component = require("component")
-local computer = require("computer")
-
 -- Hardware proxies
 local redstone = component.proxy(component.list("redstone")())
 local modem = component.proxy(component.list("modem")())
