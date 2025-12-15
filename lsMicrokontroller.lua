@@ -75,7 +75,7 @@ while true do
         setRedstone("off")
     end
 
-    -- Calculate Sleep
+    -- Calculate Sleep asdffff
     local time_left = next_ping - now
     if time_left < 0.1 then time_left = 0.1 end
 
