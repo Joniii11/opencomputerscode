@@ -14,6 +14,8 @@ local next_ping = 0
 
 modem.open(PORT)
 
+  --- asdf
+
 -- HELPER FUNCTIONS (Unchanged)
 local function serialize(tbl)
   local function ser(val)
