@@ -192,7 +192,11 @@ while true do
                 -- Safety check for nil
                 target_dist = target_dist or "off"
 
-                updateSignalsAnimated(target_main, target_dist)
+                if target_main == "off" and (target_dist == "vr0" or target_dist == "vr1" or target_dist == "vr2") then
+                    writeToSide(SIDE_DIST, target_dist)
+                else
+                    updateSignalsAnimated(target_main, target_dist)
+                end
 
                 modem.broadcast(PORT, serialize({
                     event = "signal_update_ack",
