@@ -53,7 +53,6 @@ end
 
 -- Visual flash on startup to prove code is running
 setRedstone("sh1")
-os.sleep(0.5)
 setRedstone("off")
 
 -- Initial Request
