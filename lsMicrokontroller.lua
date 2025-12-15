@@ -6,17 +6,19 @@ local PORT = 1234
 local REDSTONE_SIDE = 0 
 local ID = 2 
 
-local PING_INTERVAL = 10 -- Alle 10 Sekunden Ping senden
-local TIMEOUT_LIMIT = 15 -- Nach 15 Sekunden ohne Pong dunkel schalten
+local PING_INTERVAL = 10 
+local TIMEOUT_LIMIT = 15 
 
-local last_server_contact = computer.uptime()
-local next_ping = 0
-
+-- 1. SET MODEM STRENGTH (Critical Fix)
+if modem.isWireless() then
+    modem.setStrength(400) -- Set wireless range
+end
 modem.open(PORT)
 
-  --- asdf
+-- 2. STARTUP INDICATOR (Beep + Flash)
+computer.beep(1000, 0.5) 
 
--- HELPER FUNCTIONS (Unchanged)
+-- Helper Functions
 local function serialize(tbl)
   local function ser(val)
     if type(val) == "number" then return tostring(val)
@@ -45,28 +47,36 @@ local function setRedstone(stellung)
     elseif stellung == "sh1" then outputs[0] = 255
     elseif stellung == "kenn" then outputs[15] = 255
     end
-
+    
     redstone.setBundledOutput(REDSTONE_SIDE, outputs)
 end
 
--- Sofortige Statusabfrage beim Start
+-- Visual flash on startup to prove code is running
+setRedstone("sh1")
+os.sleep(0.5)
+setRedstone("off")
+
+-- Initial Request
 modem.broadcast(PORT, serialize({event = "signal_request_state", id = ID}))
+
+local last_server_contact = computer.uptime()
+local next_ping = 0
 
 while true do
     local now = computer.uptime()
     
-    -- PING SENDEN
+    -- SEND PING
     if now >= next_ping then
         modem.broadcast(PORT, serialize({event = "ping", id = ID}))
         next_ping = now + PING_INTERVAL
     end
 
-    -- TIMEOUT CHECK
+    -- TIMEOUT CHECK (Turn off if no PONG for too long)
     if (now - last_server_contact) > TIMEOUT_LIMIT then
         setRedstone("off")
     end
 
-    -- Sleep Berechnung
+    -- Calculate Sleep
     local time_left = next_ping - now
     if time_left < 0.1 then time_left = 0.1 end
 
@@ -78,20 +88,19 @@ while true do
         if data then
             local dataID = tonumber(data.id) or data.id
 
-            -- Event 1: Server startet neu -> Status abfragen (kein Ping/Pong)
+            -- 1. Server Restart -> Request State
             if data.event == "initial_startup" then
                 modem.broadcast(PORT, serialize({event = "signal_request_state", id = ID}))
             end
-            
-            -- Event 2: PONG erhalten -> Verbindung ist aktiv!
+
+            -- 2. Pong Received -> Update Watchdog
             if data.event == "pong" and (dataID == ID) then
                 last_server_contact = now
             end
 
-            -- Event 3: Signal Update (Stellungsbefehl oder Antwort auf Request)
+            -- 3. Signal Update -> Set State & Update Watchdog
             if data.event == "signal_update" and (dataID == ID) then
                 setRedstone(data.state)
-                -- Auch ein Signal Update beweist eine aktive Verbindung
                 last_server_contact = now 
 
                 modem.broadcast(PORT, serialize({
