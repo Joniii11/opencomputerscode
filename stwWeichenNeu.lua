@@ -7,8 +7,8 @@ local PORT = 1234
 local uptime = computer.uptime
 
 -- HARDWARE SIDES (Adjust these to match your wiring!)
-local SIDE_COMMAND  = 4  -- Output to Weichen (e.g., East)
-local SIDE_FEEDBACK = 5  -- Input from Weichen (e.g., West)
+local SIDE_COMMAND  = 1  -- Output to Weichen (e.g., East)
+local SIDE_FEEDBACK = 0  -- Input from Weichen (e.g., West)
 
 local zustaendigkeit = {}
 local colorMap = {} 
