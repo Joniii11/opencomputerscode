@@ -114,8 +114,10 @@ computer.pullSignal(0.5)
 
 -- Shows Red (Hp0/Vr0)
 writeToSide(SIDE_MAIN, "hp0")
-writeToSide(SIDE_DIST, "vr0")
+writeToSide(SIDE_MAIN, "hp1")
 computer.pullSignal(0.5)
+
+writeToSide(SIDE_MAIN, "hp2")
 
 -- Shows Off (Waiting for server)
 writeToSide(SIDE_MAIN, "off")
