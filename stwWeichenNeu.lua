@@ -6,7 +6,7 @@ local eeprom = component.proxy(component.list("eeprom")())
 local add = eeprom.getLabel()
 local PORT = 1234
 
--- Directional sides: adjust if wiring differs
+-- Directional sides: adjust if wiring differs asd asdas
 local OUTPUT_SIDE = 4 -- east side: commands to weichen
 local FEEDBACK_SIDE = 5 -- west side: feedback from weichen
 
