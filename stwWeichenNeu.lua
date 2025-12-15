@@ -79,30 +79,27 @@ local last_req = uptime()
 
 while #zustaendigkeit == 0 do
 	local eventType, _, _, port, _, message = computer.pullSignal(0.5) -- allow timeout to drive retries
-	if eventType ~= "modem_message" then goto retry end
-	if port ~= PORT then goto retry end
 
-	local data = unserialize(message)
-	if not data then goto continue end
+	if eventType == "modem_message" and port == PORT then
+		local data = unserialize(message)
+		if data then
+			if data.event == "initial_startup" then
+				modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
+			end
 
-    if data.event == "initial_startup" then
-		modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
-	end
+			if data.id == add and data.event == "zustaendigkeit_response" then
+				zustaendigkeit = unserialize(data.zustaendigkeit)
+				colorMap = {}
 
-	if data.id ~= add then goto continue end
+				for i, MY_ID in ipairs(zustaendigkeit) do
+					colorMap[tostring(MY_ID)] = i
+				end
 
-	if data.event == "zustaendigkeit_response" and data.id == add then
-		zustaendigkeit = unserialize(data.zustaendigkeit)
-		colorMap = {}
-
-		for i, MY_ID in ipairs(zustaendigkeit) do
-			colorMap[tostring(MY_ID)] = i
+				modem.broadcast(PORT, serialize({ event = "ack", id = add, zustaendigkeit = data.zustaendigkeit }))
+			end
 		end
-
-		modem.broadcast(PORT, serialize({ event = "ack", id = add, zustaendigkeit = data.zustaendigkeit }))
 	end
 
-	::retry::
 	-- periodic retry while waiting (runs both on timeout and unrelated events)
 	if (uptime() - last_req) > 2 then
 		modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
