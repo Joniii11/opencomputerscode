@@ -3,174 +3,182 @@ local redstone = component.proxy(component.list("redstone")())
 local modem = component.proxy(component.list("modem")())
 local eeprom = component.proxy(component.list("eeprom")())
 
-local add = eeprom.getLabel()
+local add = eeprom.getLabel() -- This is always a string
 local PORT = 1234
 local uptime = computer.uptime
 
--- Directional sides: adjust if wiring differs asd asdas
-local OUTPUT_SIDE = 4 -- east side: commands to weichen
-local FEEDBACK_SIDE = 5 -- west side: feedback from weichen
+-- Directional sides
+local OUTPUT_SIDE = 4 -- east
+local FEEDBACK_SIDE = 5 -- west
 
 local zustaendigkeit = {}
-local colorMap = {} -- id (string) -> color index (1-based for colorBits)
-local last_lage = {} -- id -> last reported lage
-local next_poll = 0 -- uptime timestamp for periodic feedback poll
+local colorMap = {}
+local last_lage = {}
+local next_poll = 0
 local colorBits = {
-	"white", "orange", "magenta", "lightBlue", "yellow", "lime", "pink", "gray",
-	"lightGray", "cyan", "purple", "blue", "brown", "green", "red", "black"
+    "white", "orange", "magenta", "lightBlue", "yellow", "lime", "pink", "gray",
+    "lightGray", "cyan", "purple", "blue", "brown", "green", "red", "black"
 }
 
 modem.open(PORT)
 
+-- Basic serialization helper
 local function serialize(tbl)
-	local function ser(val)
-		if type(val) == "number" then return tostring(val)
-		elseif type(val) == "boolean" then return val and "true" or "false"
-		elseif type(val) == "string" then
-			return '"' .. val:gsub('\\', '\\\\'):gsub('"', '\\"') .. '"'
-		elseif type(val) == "table" then
-			local items = {}
-			for k, v in pairs(val) do
-				items[#items + 1] = "[" .. ser(k) .. "]=" .. ser(v)
-			end
-			return "{" .. table.concat(items, ",") .. "}"
-		else return "nil" end
-	end
-	return ser(tbl)
+    local function ser(val)
+        if type(val) == "number" then return tostring(val)
+        elseif type(val) == "boolean" then return val and "true" or "false"
+        elseif type(val) == "string" then
+            return '"' .. val:gsub('\\', '\\\\'):gsub('"', '\\"') .. '"'
+        elseif type(val) == "table" then
+            local items = {}
+            for k, v in pairs(val) do
+                items[#items + 1] = "[" .. ser(k) .. "]=" .. ser(v)
+            end
+            return "{" .. table.concat(items, ",") .. "}"
+        else return "nil" end
+    end
+    return ser(tbl)
 end
 
 local function unserialize(str)
-	local f = load("return " .. str)
-	if not f then return nil end
-	return f()
+    local f = load("return " .. str)
+    if not f then return nil end
+    local success, res = pcall(f)
+    if success then return res else return nil end
 end
 
 local function setRedstone(lage, id)
-	local idx = colorMap[tostring(id)] or colorMap[id]
-	if not idx then
-		modem.broadcast(9999, "ID " .. tostring(id) .. " not found in zustaendigkeit")
-		return
-	end
+    local idx = colorMap[tostring(id)]
+    if not idx then return end
 
-	local colorIndex = idx - 1 -- bundled index
-	local level = (lage == "-") and 255 or 0
+    local colorIndex = idx - 1 -- 0-15 based index for bundled
+    local level = (lage == "-") and 255 or 0
 
-	local currentValues = redstone.getBundledOutput(OUTPUT_SIDE) or {}
-	currentValues[colorIndex] = level
-	redstone.setBundledOutput(OUTPUT_SIDE, currentValues)
-
-	modem.broadcast(9999, "Set redstone for ID " .. tostring(id) .. " color " .. (colorBits[idx] or "?") .. " (index " .. colorIndex .. ") to " .. level)
+    local currentValues = redstone.getBundledOutput(OUTPUT_SIDE) or {}
+    -- Ensure table has 16 entries to be safe, though OC handles sparse tables usually
+    for i=0,15 do currentValues[i] = currentValues[i] or 0 end
+    
+    currentValues[colorIndex] = level
+    redstone.setBundledOutput(OUTPUT_SIDE, currentValues)
 end
 
 local function readWeichenlage(id)
-	local idx = colorMap[tostring(id)] or colorMap[id]
-	if not idx then return nil end
+    local idx = colorMap[tostring(id)]
+    if not idx then return nil end
 
-	local colorIndex = idx - 1
-	local inputs = redstone.getBundledInput(FEEDBACK_SIDE) or {}
-	local level = inputs[colorIndex] or 0
-	-- Off -> "+"; On -> "-"
-	return (level > 0) and "-" or "+"
+    local colorIndex = idx - 1
+    local inputs = redstone.getBundledInput(FEEDBACK_SIDE) or {}
+    local level = inputs[colorIndex] or 0
+    return (level > 0) and "-" or "+"
 end
 
--- Request responsibility map
+-- ============================================================================
+-- 1. INITIAL SETUP LOOP
+-- ============================================================================
 modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
 local last_req = uptime()
 
 while #zustaendigkeit == 0 do
-	local eventType, _, _, port, _, message = computer.pullSignal(0.5) -- allow timeout to drive retries
+    -- Short timeout to keep checking; doesn't block retry logic significantly
+    local eventType, _, _, port, _, message = computer.pullSignal(0.5) 
 
-	if eventType == "modem_message" and port == PORT then
-		local data = unserialize(message)
-		if data then
-			if data.event == "initial_startup" then
-				modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
-			end
+    -- Retry logic (runs regardless of whether a signal was received)
+    if (uptime() - last_req) > 2 then
+        modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
+        last_req = uptime()
+    end
 
-			if data.id == add and data.event == "zustaendigkeit_response" then
-				zustaendigkeit = unserialize(data.zustaendigkeit)
-				colorMap = {}
+    if eventType == "modem_message" and port == PORT then
+        local data = unserialize(message)
+        if data then
+            -- Handle server restart trigger
+            if data.event == "initial_startup" then
+                modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
+            end
 
-				for i, MY_ID in ipairs(zustaendigkeit) do
-					colorMap[tostring(MY_ID)] = i
-				end
+            -- FIX: Compare IDs as strings to avoid Type Mismatch
+            if tostring(data.id) == tostring(add) and data.event == "zustaendigkeit_response" then
+                zustaendigkeit = unserialize(data.zustaendigkeit) or {}
+                colorMap = {}
 
-				modem.broadcast(PORT, serialize({ event = "ack", id = add, zustaendigkeit = data.zustaendigkeit }))
-			end
-		end
-	end
+                for i, MY_ID in ipairs(zustaendigkeit) do
+                    colorMap[tostring(MY_ID)] = i
+                    -- Report initial status immediately
+                    local lage = readWeichenlage(MY_ID) or "+"
+                    last_lage[tostring(MY_ID)] = lage
+                end
 
-	-- periodic retry while waiting (runs both on timeout and unrelated events)
-	if (uptime() - last_req) > 2 then
-		modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
-		last_req = uptime()
-	end
+                modem.broadcast(PORT, serialize({ event = "ack", id = add, zustaendigkeit = data.zustaendigkeit }))
+            end
+        end
+    end
 end
 
--- On startup: report initial lage from feedback instead of requesting -----------------------
-for _, MY_ID in ipairs(zustaendigkeit) do
-	local lage = readWeichenlage(MY_ID) or "+"
-	last_lage[MY_ID] = lage
-	modem.broadcast(PORT, serialize({ event = "ack", id = MY_ID, lage = lage }))
-end
-
--- poll feedback every 2 seconds regardless of incoming messages
+-- ============================================================================
+-- 2. MAIN LOOP
+-- ============================================================================
 next_poll = uptime() + 2
 
 while true do
-	local eventType, _, _, port, _, message = computer.pullSignal(5) -- 5s poll window
-	local now = uptime()
-	if now >= next_poll then
-		next_poll = now + 2
-		for _, MY_ID in ipairs(zustaendigkeit) do
-			local sensed = readWeichenlage(MY_ID) or "+"
-			if last_lage[MY_ID] ~= sensed then
-				last_lage[MY_ID] = sensed
-				modem.broadcast(PORT, serialize({ event = "ack", id = MY_ID, lage = sensed }))
-				modem.broadcast(9999, "feedback change " .. tostring(MY_ID) .. " -> " .. sensed)
-			end
-		end
-	end
+    local now = uptime()
+    
+    -- FIX: Dynamic timeout calculation
+    -- We calculate how long to wait until the next poll is due.
+    -- If a message arrives earlier, pullSignal returns earlier.
+    local time_to_wait = next_poll - now
+    if time_to_wait < 0.1 then time_to_wait = 0.1 end -- Prevent 0 or negative wait
+    
+    local eventType, _, _, port, _, message = computer.pullSignal(time_to_wait)
+    
+    -- Update time after waking up
+    now = uptime()
 
-	if eventType == nil then goto continue end
-	if eventType ~= "modem_message" then goto continue end
-	if port ~= PORT then goto continue end
+    -- A. PERIODIC FEEDBACK POLL
+    if now >= next_poll then
+        next_poll = now + 2
+        for _, MY_ID in ipairs(zustaendigkeit) do
+            local strID = tostring(MY_ID)
+            local sensed = readWeichenlage(MY_ID) or "+"
+            
+            if last_lage[strID] ~= sensed then
+                last_lage[strID] = sensed
+                modem.broadcast(PORT, serialize({ event = "ack", id = MY_ID, lage = sensed }))
+                -- Debug broadcast
+                modem.broadcast(9999, "feedback change " .. strID .. " -> " .. sensed)
+            end
+        end
+    end
 
-	local data = unserialize(message)
-	if not data then goto continue end
-
-	if data.event == "initial_startup" then
-		modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
-	end
-
-	local dataId = tonumber(data.id) or data.id
-
-	local isResponsible = false
-	for _, MY_ID in ipairs(zustaendigkeit) do
-		if dataId == MY_ID then
-			isResponsible = true
-			break
-		end
-	end
-
-	if not isResponsible then goto continue end
-
-	if data.event == "umstellauftrag" then
-		modem.broadcast(9999, "umstellauftrag " .. tostring(dataId))
-		setRedstone(data.lage, dataId)
-		local lage = readWeichenlage(dataId) or data.lage or "+"
-		last_lage[dataId] = lage
-		modem.broadcast(PORT, serialize({ event = "ack", id = dataId, lage = lage }))
-	elseif data.event == "request_lage" then
-		local lage = readWeichenlage(dataId) or "+"
-		last_lage[dataId] = lage
-		modem.broadcast(PORT, serialize({ event = "ack", id = dataId, lage = lage }))
-	elseif data.event == "lage_response" then
-		-- Treat as confirmation request; echo back sensed state
-		local lage = readWeichenlage(dataId) or data.lage or "+"
-		last_lage[dataId] = lage
-		modem.broadcast(PORT, serialize({ event = "ack", id = dataId, lage = lage }))
-	end
-
-	::continue::
+    -- B. MESSAGE HANDLING
+    if eventType == "modem_message" and port == PORT then
+        local data = unserialize(message)
+        
+        if data then
+            -- Handle global restart
+            if data.event == "initial_startup" then
+                -- On main loop restart, we might want to re-verify, but usually just ack
+                modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
+            else
+                local dataIdStr = tostring(data.id)
+                
+                -- Check if we are responsible for this ID
+                if colorMap[dataIdStr] then
+                    if data.event == "umstellauftrag" then
+                        modem.broadcast(9999, "umstellauftrag " .. dataIdStr)
+                        setRedstone(data.lage, dataIdStr)
+                        
+                        -- Read back confirmation
+                        local lage = readWeichenlage(dataIdStr) or data.lage or "+"
+                        last_lage[dataIdStr] = lage
+                        modem.broadcast(PORT, serialize({ event = "ack", id = dataIdStr, lage = lage }))
+                    
+                    elseif data.event == "request_lage" or data.event == "lage_response" then
+                        local lage = readWeichenlage(dataIdStr) or "+"
+                        last_lage[dataIdStr] = lage
+                        modem.broadcast(PORT, serialize({ event = "ack", id = dataIdStr, lage = lage }))
+                    end
+                end
+            end
+        end
+    end
 end
