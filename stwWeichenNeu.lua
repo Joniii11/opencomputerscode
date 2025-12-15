@@ -14,6 +14,7 @@ local FEEDBACK_SIDE = 5 -- west side: feedback from weichen
 local zustaendigkeit = {}
 local colorMap = {} -- id (string) -> color index (1-based for colorBits)
 local last_lage = {} -- id -> last reported lage
+local next_poll = 0 -- uptime timestamp for periodic feedback poll
 local colorBits = {
 	"white", "orange", "magenta", "lightBlue", "yellow", "lime", "pink", "gray",
 	"lightGray", "cyan", "purple", "blue", "brown", "green", "red", "black"
@@ -77,9 +78,9 @@ modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
 local last_req = uptime()
 
 while #zustaendigkeit == 0 do
-	local eventType, _, _, port, _, message = computer.pullSignal()
-	if eventType ~= "modem_message" then goto continue end
-	if port ~= PORT then goto continue end
+	local eventType, _, _, port, _, message = computer.pullSignal(0.5) -- allow timeout to drive retries
+	if eventType ~= "modem_message" then goto retry end
+	if port ~= PORT then goto retry end
 
 	local data = unserialize(message)
 	if not data then goto continue end
@@ -101,13 +102,12 @@ while #zustaendigkeit == 0 do
 		modem.broadcast(PORT, serialize({ event = "ack", id = add, zustaendigkeit = data.zustaendigkeit }))
 	end
 
-	-- periodic retry while waiting
+	::retry::
+	-- periodic retry while waiting (runs both on timeout and unrelated events)
 	if (uptime() - last_req) > 2 then
 		modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
 		last_req = uptime()
 	end
-
-	::continue::
 end
 
 -- On startup: report initial lage from feedback instead of requesting
@@ -117,19 +117,25 @@ for _, MY_ID in ipairs(zustaendigkeit) do
 	modem.broadcast(PORT, serialize({ event = "ack", id = MY_ID, lage = lage }))
 end
 
+-- poll feedback every 2 seconds regardless of incoming messages
+next_poll = uptime() + 2
+
 while true do
 	local eventType, _, _, port, _, message = computer.pullSignal(5) -- 5s poll window
-	if eventType == nil then
-		-- timeout: poll feedback for changes
+	local now = uptime()
+	if now >= next_poll then
+		next_poll = now + 2
 		for _, MY_ID in ipairs(zustaendigkeit) do
 			local sensed = readWeichenlage(MY_ID) or "+"
 			if last_lage[MY_ID] ~= sensed then
 				last_lage[MY_ID] = sensed
 				modem.broadcast(PORT, serialize({ event = "ack", id = MY_ID, lage = sensed }))
+				modem.broadcast(9999, "feedback change " .. tostring(MY_ID) .. " -> " .. sensed)
 			end
 		end
-		goto continue
 	end
+
+	if eventType == nil then goto continue end
 	if eventType ~= "modem_message" then goto continue end
 	if port ~= PORT then goto continue end
 
