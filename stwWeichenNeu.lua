@@ -5,6 +5,7 @@ local eeprom = component.proxy(component.list("eeprom")())
 
 local add = eeprom.getLabel()
 local PORT = 1234
+local uptime = computer.uptime
 
 -- Directional sides: adjust if wiring differs asd asdas
 local OUTPUT_SIDE = 4 -- east side: commands to weichen
@@ -73,6 +74,7 @@ end
 
 -- Request responsibility map
 modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
+local last_req = uptime()
 
 while #zustaendigkeit == 0 do
 	local eventType, _, _, port, _, message = computer.pullSignal()
@@ -96,6 +98,12 @@ while #zustaendigkeit == 0 do
 		end
 
 		modem.broadcast(PORT, serialize({ event = "ack", id = add, zustaendigkeit = data.zustaendigkeit }))
+	end
+
+	-- periodic retry while waiting
+	if (uptime() - last_req) > 2 then
+		modem.broadcast(PORT, serialize({ event = "zustaendigkeit_request", id = add }))
+		last_req = uptime()
 	end
 
 	::continue::
