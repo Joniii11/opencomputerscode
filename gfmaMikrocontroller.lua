@@ -78,7 +78,7 @@ local function handleRedstoneEvent(side, value, color)
   end
 end
 
--- Full Scan (Used on startup only)
+-- Full Scan (Used on startup only) and do some other stuff cause this is kinda gay
 local function scanAll()
   for side, offset in pairs(SIDE_OFFSETS) do
     local inputs = redstone.getBundledInput(side) or {}
