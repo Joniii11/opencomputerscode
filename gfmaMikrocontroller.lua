@@ -1,7 +1,6 @@
 local redstone = component.proxy(component.list("redstone")())
 local modem = component.proxy(component.list("modem")())
 local eeprom = component.proxy(component.list("eeprom")())
-local computer = require("computer") -- Required for beep
 
 local add = eeprom.getLabel()
 local PORT = 1234
@@ -106,7 +105,7 @@ while #zustaendigkeit == 0 do
   if now - last_req_time > 2 then
     modem.broadcast(PORT, serialize({
       event = "zustaendigkeit_request", 
-      id = add, 
+      id = add,
     }))
     last_req_time = now
   end
