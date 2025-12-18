@@ -26,6 +26,8 @@ for uuid, data in pairs(SENSORS) do
     if proxy then
         data.proxy = proxy -- Wir speichern den Proxy direkt in der Tabelle!
         computer.beep(2000, 0.5)
+    else 
+        computer.beep(500, 2.0)
     end
 end
 
