@@ -1,9 +1,4 @@
-local component = require("component")
-local computer = require("computer")
-
--- Proxies direkt laden (Spart RAM und ist schneller)
 local modem = component.proxy(component.list("modem")())
-local eeprom = component.proxy(component.list("eeprom")())
 
 -- === KONFIGURATION ===
 local PORT = 12345 -- Port für GFA Kommunikation
@@ -23,8 +18,18 @@ local is_occupied = false
 if modem.isWireless() then
   modem.setStrength(400)
 end
+
 modem.open(PORT)
-computer.beep(1000, 0.5) -- Startup Beep
+
+for uuid, data in pairs(SENSORS) do
+    local proxy = component.proxy(uuid)
+    if proxy then
+        data.proxy = proxy -- Wir speichern den Proxy direkt in der Tabelle!
+        computer.beep(2000, 0.5)
+    end
+end
+
+computer.beep(1000, 0.5)
 
 -- === HELPER FUNCTIONS (Vom Example übernommen) ===
 local function serialize(tbl)
@@ -55,7 +60,6 @@ local function sendUpdate(trigger_event)
     event = trigger_event, -- Z.B. "GFA_UPDATE" oder "GFA_STATUS_REPORT"
     id = MY_ID,
     occupied = is_occupied,
-    count = axle_count
   }))
 end
 
@@ -66,39 +70,28 @@ while true do
   local signalType, _, sender, port, _, message = computer.pullSignal()
 
   -- 1. ZUG BEWEGUNG (IR Event)
-  if signalType == "ir_train_overhead" then
-    -- args: name, address, augmentType, stockUuid (Die Reihenfolge bei pullSignal ist anders als bei event.pull)
-    -- Bei computer.pullSignal sind die args ab index 2: address, augmentType, stockUuid
-    local sensor_addr = sender -- Bei ir_train_overhead ist der 2. Rückgabewert die Adresse der Komponente
-    
-    local sensor_config = SENSORS[sensor_addr]
+    if signalType == "ir_train_overhead" then
+        -- sender ist die UUID des Sensors
+        local sensor_data = SENSORS[sender]
 
-    if sensor_config then
-       -- Wir holen den Proxy dynamisch, um .info() zu machen
-       local success, detector = pcall(component.proxy, sensor_addr)
-       
-       if success and detector then
-          local info = detector.info()
-          -- Direction prüfen (und auf lower case zwingen sicherheitshalber)
-          if info and info.direction then
-             local train_dir = string.lower(info.direction)
+        if sensor_data and sensor_data.proxy then
+           local success, info = pcall(sensor_data.proxy.info)
+        
+           if success and info and info.direction then
+               local train_dir = string.lower(info.direction)
 
-             if train_dir == sensor_config.dir_in then
-                -- REIN
-                axle_count = axle_count + 1
-                sendUpdate("gfma_update")
-                
-             elseif train_dir == sensor_config.dir_out then
-                -- RAUS
-                axle_count = axle_count - 1
-                sendUpdate("gfma_update")
-             end
+               if train_dir == sensor_data.dir_in then
+                  axle_count = axle_count + 1
+                  sendUpdate("gfma_update")
 
-             -- Safety: Nicht unter 0 zählen
-             if axle_count < 0 then axle_count = 0 end
-          end
-       end
-    end
+               elseif train_dir == sensor_data.dir_out then
+                  axle_count = axle_count - 1
+                  sendUpdate("gfma_update")
+               end
+
+               if axle_count < 0 then axle_count = 0 end
+           end
+        end
 
   -- 2. NETZWERK NACHRICHTEN
   elseif signalType == "modem_message" and port == PORT then
