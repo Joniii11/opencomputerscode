@@ -29,7 +29,7 @@ for uuid, data in pairs(SENSORS) do
     end
 end
 
-computer.beep(1000, 0.5)
+--computer.beep(1000, 0.5)
 
 -- === HELPER FUNCTIONS (Vom Example übernommen) ===
 local function serialize(tbl)
