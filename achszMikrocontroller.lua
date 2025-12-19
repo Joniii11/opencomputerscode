@@ -5,33 +5,33 @@ local PORT = 12345 -- Port für GFA Kommunikation
 
 local MY_ID = 5
 
+local ID_SENSOR_1 = "b91ba06e-fe50-4e3c-8219-ec5d6c920e40"
+local ID_SENSOR_2 = "50d5c6e3-ba81-4fb8-ad05-71dc092ba9d2"
+
 local SENSORS = {
-  ["b91ba06e-fe50-4e3c-8219-ec5d6c920e40"] = { dir_in = "north", dir_out = "south" },
-  ["b6395384-235f-4937-9959-e424940f8756"] = { dir_in = "north", dir_out = "south" }
+  [ID_SENSOR_1] = { 
+      dir_in = "north", 
+      dir_out = "south", 
+      proxy = load_sensor(ID_SENSOR_1)
+  },
+  [ID_SENSOR_2] = { 
+      dir_in = "north", 
+      dir_out = "south", 
+      proxy = load_sensor(ID_SENSOR_2)
+  }
 }
+
+if SENSORS[ID_SENSOR_1].proxy and SENSORS[ID_SENSOR_2].proxy then
+    computer.beep(2000, 0.5) -- High Beep: Both sensors active
+else
+    computer.beep(500, 1.0)  -- Low Beep: Something is missing!
+end
 
 -- STATE
 local axle_count = 0
 local is_occupied = false
 
--- === SETUP ===
-if modem.isWireless() then
-  modem.setStrength(400)
-end
-
 modem.open(PORT)
-
-for uuid, data in pairs(SENSORS) do
-    local proxy = component.proxy(uuid)
-    if proxy then
-        data.proxy = proxy -- Wir speichern den Proxy direkt in der Tabelle!
-        computer.beep(2000, 0.5)
-    else 
-        computer.beep(500, 2.0)
-    end
-end
-
---computer.beep(1000, 0.5)
 
 -- === HELPER FUNCTIONS (Vom Example übernommen) ===
 local function serialize(tbl)
