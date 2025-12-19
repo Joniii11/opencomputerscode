@@ -1,7 +1,7 @@
 local modem = component.proxy(component.list("modem")())
 
 -- === KONFIGURATION ===
-local PORT = 12345 -- Port für GFA Kommunikation
+local PORT = 1234
 
 local MY_ID = 5
 
