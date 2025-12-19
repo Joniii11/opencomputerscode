@@ -5,6 +5,12 @@ local PORT = 1234
 
 local MY_ID = 5
 
+local function load_sensor(uuid)
+  local success, proxy = pcall(component.proxy, uuid)
+  if success then return proxy end
+  return nil -- Returns nil if sensor is missing
+end
+
 local ID_SENSOR_1 = "b91ba06e-fe50-4e3c-8219-ec5d6c920e40"
 local ID_SENSOR_2 = "50d5c6e3-ba81-4fb8-ad05-71dc092ba9d2"
 
